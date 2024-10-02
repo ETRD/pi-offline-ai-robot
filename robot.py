@@ -17,6 +17,9 @@ from funasr.utils.postprocess_utils import rich_transcription_postprocess
 # for llama
 import llama_cpp
 
+# for tts
+import pyttsx4
+
 import threading
 import queue
 
@@ -24,7 +27,10 @@ start_record_event = threading.Event()
 stop_record_event = threading.Event()
 sensevoice_event = threading.Event()
 llama_event = threading.Event()
+tts_event = threading.Event()
+
 ask_text_q = queue.Queue()
+ans_text_q = queue.Queue()
 
 
 Device.pin_factory = LGPIOFactory()
@@ -112,24 +118,41 @@ def llama_thread():
         ans_text = model.create_chat_completion(
             messages=[{
                 "role": "user",
-                "content": f"{ask_text}, 回答在50个字以内"
+                "content": f"{ask_text}, 回答在60个字以内"
             }],
             logprobs=False
         )
         ans_text = ans_text['choices'][0]['message']['content']
         print(ans_text)
+        ans_text_q.put(ans_text)
+        tts_event.set()
+
+def tts_thread():
+    engine = pyttsx4.init()
+    engine.setProperty('voice', 'zh')
+    while True:
+        tts_event.wait()
+        tts_event.clear()
+        tts_text = ans_text_q.get()
+        engine.say(tts_text)
+        engine.runAndWait()
+
+
 
 thread_record = threading.Thread(target=recording_thread)
 thread_sensevoice = threading.Thread(target=sensevoice_thread)
 thread_llama = threading.Thread(target=llama_thread)
+thread_tts = threading.Thread(target=tts_thread)
 
 thread_record.start()
 thread_sensevoice.start()
 thread_llama.start()
+thread_tts.start()
 
 thread_record.join()
 thread_sensevoice.join()
 thread_llama.join()
+thread_tts.join()
 
 # Keep the program running
 pause()
