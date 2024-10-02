@@ -84,7 +84,7 @@ def recording_thread():
                 time.sleep(.001)
 
 def sensevoice_thread():
-    model_dir = "iic/SenseVoiceSmall"
+    model_dir = "./models/SenseVoiceSmall"
     m, kwargs = SenseVoiceSmall.from_pretrained(model=model_dir, device="cuda:0")
     m.eval()
     print("Load sensevoid model done")
@@ -107,7 +107,8 @@ def sensevoice_thread():
 
 def llama_thread():
     model = llama_cpp.Llama(
-    model_path="./models/llama/qwen1_5-0_5b-chat-q4_0.gguf",
+    model_path="./models/llama/qwen2.5-0.5b-instruct-q4_0.gguf",
+    verbose = False,
     )
     print("Load llama model done")
     while True:
@@ -118,9 +119,10 @@ def llama_thread():
         ans_text = model.create_chat_completion(
             messages=[{
                 "role": "user",
-                "content": f"{ask_text}, 回答在60个字以内"
+                "content": f"{ask_text}, 回答在60个token以内"
             }],
-            logprobs=False
+            logprobs=False,
+            #max_tokens = 60,
         )
         ans_text = ans_text['choices'][0]['message']['content']
         print(ans_text)
