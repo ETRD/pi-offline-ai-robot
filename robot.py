@@ -9,6 +9,7 @@ import time
 import getopt
 import wave
 import alsaaudio
+from datetime import datetime
 
 # for SenseVoice
 from model import SenseVoiceSmall
@@ -16,9 +17,12 @@ from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
 # for llama
 import llama_cpp
+import re
 
 # for tts
 import pyttsx4
+import subprocess
+import psutil
 
 import threading
 import queue
@@ -28,6 +32,7 @@ stop_record_event = threading.Event()
 sensevoice_event = threading.Event()
 llama_event = threading.Event()
 tts_event = threading.Event()
+stop_tts_event = threading.Event()
 
 ask_text_q = queue.Queue()
 ans_text_q = queue.Queue()
@@ -40,8 +45,10 @@ key2 = Button(17)
 
 def key2_pressed():
     start_record_event.set()
+    stop_tts_event.set()
 def key2_released():
     stop_record_event.set()
+    stop_tts_event.clear()
 
 # Bind key press event
 key2.when_pressed = key2_pressed
@@ -55,7 +62,6 @@ def recording_thread():
     while True:
         start_record_event.wait()
         start_record_event.clear()
-        print("Start record...")
         # record audio init
         device = 'default'
         wavfile = wave.open("test.wav", 'wb')
@@ -68,13 +74,18 @@ def recording_thread():
         wavfile.setnchannels(1)
         wavfile.setsampwidth(2)    #PCM_FORMAT_S16_LE
         wavfile.setframerate(44100)
-
+        print("Start speaking...")
+        time_start = datetime.now()
         while True:
             if stop_record_event.is_set():
                 stop_record_event.clear()
-                print("Stop record...")
+                time_stop = datetime.now()
+                print("Stop speaking...")
                 wavfile.close()
-                sensevoice_event.set()
+                if (time_stop.timestamp() - time_start.timestamp() >= 1):
+                    sensevoice_event.set()
+                else:
+                    print('The speaking time is too short')
                 break
                 # Read data from device
             l, data = mic.read()
@@ -110,6 +121,7 @@ def llama_thread():
     model_path="./models/llama/qwen2.5-0.5b-instruct-q4_0.gguf",
     verbose = False,
     )
+    ch_punctuations_re = "[，。？；]"
     print("Load llama model done")
     while True:
         llama_event.wait()
@@ -122,22 +134,56 @@ def llama_thread():
                 "content": f"{ask_text}, 回答在60个token以内"
             }],
             logprobs=False,
-            #max_tokens = 60,
+            #stream=True,
+            max_tokens = 80,
         )
         ans_text = ans_text['choices'][0]['message']['content']
         print(ans_text)
-        ans_text_q.put(ans_text)
-        tts_event.set()
+        ans_text_tts = ans_text.replace("，", "。")
+        ans_text_q.put(ans_text_tts)
+#        ans_text = ""
+#        for chunk in ans_stream:
+#            delta = chunk['choices'][0]['delta']
+#            if 'role' in delta:
+#                print(delta['role'], end=': ')
+#            elif 'content' in delta:
+#                #print(delta['content'], end='')
+#                ans_text += delta['content']
+#                if re.search(ch_punctuations_re, ans_text):
+#                    print(ans_text, end='')
+#                    ans_text_q.put(ans_text)
+#                    ans_text = ""
+
+def terminate_process(pid):
+    try:
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            child.terminate()
+        parent.terminate()
+        time.sleep(0.5)
+        if parent.is_running():
+            parent.kill()
+    except Exception as e:
+        print(f"Error terminating process: {e}")
 
 def tts_thread():
-    engine = pyttsx4.init()
-    engine.setProperty('voice', 'zh')
+    #engine = pyttsx4.init()
+    #engine.setProperty('voice', 'zh')
+    piper_cmd = './piper/piper --model ./models/piper/zh_CN-huayan-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -'
     while True:
-        tts_event.wait()
-        tts_event.clear()
         tts_text = ans_text_q.get()
-        engine.say(tts_text)
-        engine.runAndWait()
+        command = f"echo '{tts_text}' | {piper_cmd}"
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        while True:
+            if stop_tts_event.is_set():
+                terminate_process(process.pid)
+                break
+            if process.poll() is not None:
+                break
+            time.sleep(0.01)
+        process.wait()
+        #engine.say(tts_text)
+        #engine.runAndWait()
 
 
 
