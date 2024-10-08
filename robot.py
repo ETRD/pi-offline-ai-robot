@@ -27,12 +27,27 @@ import psutil
 import threading
 import queue
 
+# for oled
+from PIL import Image, ImageSequence
+from PIL import ImageFont, ImageDraw
+from luma.core.interface.serial import i2c
+from luma.core.render import canvas
+from luma.oled.device import ssd1306
+
+serial_64 = i2c(port=1, address=0x3D)
+oled_right = ssd1306(serial_64, width=128, height=64)
+serial_32 = i2c(port=1, address=0x3C)
+oled_left = ssd1306(serial_32, width=128, height=64)
+
 start_record_event = threading.Event()
 stop_record_event = threading.Event()
 sensevoice_event = threading.Event()
 llama_event = threading.Event()
 tts_event = threading.Event()
 stop_tts_event = threading.Event()
+
+llama_load_done = threading.Event()
+senvc_load_done = threading.Event()
 
 ask_text_q = queue.Queue()
 ans_text_q = queue.Queue()
@@ -98,6 +113,7 @@ def sensevoice_thread():
     model_dir = "./models/SenseVoiceSmall"
     m, kwargs = SenseVoiceSmall.from_pretrained(model=model_dir, device="cuda:0")
     m.eval()
+    senvc_load_done.set()
     print("Load sensevoid model done")
 
     while True:
@@ -118,10 +134,11 @@ def sensevoice_thread():
 
 def llama_thread():
     model = llama_cpp.Llama(
-    model_path="./models/llama/qwen2.5-0.5b-instruct-q4_0.gguf",
+    model_path="./models/llama/qwen1_5-0_5b-chat-q4_0.gguf",
     verbose = False,
     )
     ch_punctuations_re = "[，。？；]"
+    llama_load_done.set()
     print("Load llama model done")
     while True:
         llama_event.wait()
@@ -131,7 +148,7 @@ def llama_thread():
         ans_text = model.create_chat_completion(
             messages=[{
                 "role": "user",
-                "content": f"{ask_text}, 回答在60个token以内"
+                "content": f"{ask_text}"
             }],
             logprobs=False,
             #stream=True,
@@ -185,22 +202,45 @@ def tts_thread():
         #engine.say(tts_text)
         #engine.runAndWait()
 
+def oled_thread(oled_device, dir):
+    with Image.open(f"./img/{dir}_logo.bmp") as img:
+        img_resized = img.convert("1").resize((128, 64))
+        oled_device.display(img_resized)
+        llama_load_done.wait()
+        senvc_load_done.wait()
+    frames = []
+    durations = [] 
+    with Image.open(f"./img/{dir}_eye.gif") as img:
+        for frame in ImageSequence.Iterator(img):
+            frames.append(frame.convert("1").resize((128,64)))
+            durations.append(frame.info.get('duration', 100) / 1000.0)
+    while True:
+    # Display each image with an idea
+        for frame, duration in zip(frames, durations):
+            oled_device.display(frame)
+            time.sleep(duration*2)
 
 
 thread_record = threading.Thread(target=recording_thread)
 thread_sensevoice = threading.Thread(target=sensevoice_thread)
 thread_llama = threading.Thread(target=llama_thread)
 thread_tts = threading.Thread(target=tts_thread)
+thread_oled_left = threading.Thread(target=oled_thread, args=(oled_left,"left"))
+thread_oled_right = threading.Thread(target=oled_thread, args=(oled_right,"right"))
 
 thread_record.start()
 thread_sensevoice.start()
 thread_llama.start()
 thread_tts.start()
+thread_oled_left.start()
+thread_oled_right.start()
 
 thread_record.join()
 thread_sensevoice.join()
 thread_llama.join()
 thread_tts.join()
+thread_oled_left.join()
+thread_oled_right.join()
 
 # Keep the program running
 pause()
