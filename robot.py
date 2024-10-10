@@ -41,10 +41,13 @@ oled_left = ssd1306(serial_32, width=128, height=64)
 
 start_record_event = threading.Event()
 stop_record_event = threading.Event()
-sensevoice_event = threading.Event()
-llama_event = threading.Event()
-tts_event = threading.Event()
+trig_sensevoice_event = threading.Event()
+trig_llama_event = threading.Event()
 stop_tts_event = threading.Event()
+
+model_doing_event = threading.Event()
+
+show_record_event = threading.Event()
 
 llama_load_done = threading.Event()
 senvc_load_done = threading.Event()
@@ -61,9 +64,12 @@ key2 = Button(17)
 def key2_pressed():
     start_record_event.set()
     stop_tts_event.set()
+    show_record_event.set()
 def key2_released():
     stop_record_event.set()
+    model_doing_event.set()
     stop_tts_event.clear()
+    show_record_event.clear()
 
 # Bind key press event
 key2.when_pressed = key2_pressed
@@ -98,9 +104,10 @@ def recording_thread():
                 print("Stop speaking...")
                 wavfile.close()
                 if (time_stop.timestamp() - time_start.timestamp() >= 1):
-                    sensevoice_event.set()
+                    trig_sensevoice_event.set()
                 else:
                     print('The speaking time is too short')
+                    model_doing_event.clear()
                 break
                 # Read data from device
             l, data = mic.read()
@@ -117,8 +124,8 @@ def sensevoice_thread():
     print("Load sensevoid model done")
 
     while True:
-        sensevoice_event.wait()
-        sensevoice_event.clear()
+        trig_sensevoice_event.wait()
+        trig_sensevoice_event.clear()
         res = m.inference(
             data_in=f"./test.wav",
             language="auto", # "zh", "en", "yue", "ja", "ko", "nospeech"
@@ -129,7 +136,7 @@ def sensevoice_thread():
 
         text = rich_transcription_postprocess(res[0][0]["text"])
         ask_text_q.put(text)
-        llama_event.set()
+        trig_llama_event.set()
 
 
 def llama_thread():
@@ -141,8 +148,8 @@ def llama_thread():
     llama_load_done.set()
     print("Load llama model done")
     while True:
-        llama_event.wait()
-        llama_event.clear()
+        trig_llama_event.wait()
+        trig_llama_event.clear()
         ask_text = ask_text_q.get()
         print(ask_text)
         ans_text = model.create_chat_completion(
@@ -158,6 +165,7 @@ def llama_thread():
         print(ans_text)
         ans_text_tts = ans_text.replace("，", "。")
         ans_text_q.put(ans_text_tts)
+        model_doing_event.clear()
 #        ans_text = ""
 #        for chunk in ans_stream:
 #            delta = chunk['choices'][0]['delta']
@@ -208,17 +216,36 @@ def oled_thread(oled_device, dir):
         oled_device.display(img_resized)
         llama_load_done.wait()
         senvc_load_done.wait()
-    frames = []
-    durations = [] 
+    frames_eye = []
+    durations_eye = [] 
     with Image.open(f"./img/{dir}_eye.gif") as img:
         for frame in ImageSequence.Iterator(img):
-            frames.append(frame.convert("1").resize((128,64)))
-            durations.append(frame.info.get('duration', 100) / 1000.0)
+            frames_eye.append(frame.convert("1").resize((128,64)))
+            durations_eye.append(frame.info.get('duration', 100) / 1000.0)
+    frames_rcd = []
+    durations_rcd = [] 
+    with Image.open(f"./img/record.gif") as img:
+        for frame in ImageSequence.Iterator(img):
+            frames_rcd.append(frame.convert("1").resize((128,64)))
+            durations_rcd.append(frame.info.get('duration', 100) / 1000.0)
+
     while True:
-    # Display each image with an idea
-        for frame, duration in zip(frames, durations):
-            oled_device.display(frame)
-            time.sleep(duration*2)
+        if show_record_event.is_set():
+            for frame, duration in zip(frames_rcd, durations_rcd):
+                oled_device.display(frame)
+                time.sleep(duration)
+                if not show_record_event.is_set():
+                    break
+        else:
+            for frame, duration in zip(frames_eye, durations_eye):
+                if model_doing_event.is_set() and duration > 1:
+                    continue
+                oled_device.display(frame)
+                show_record_event.wait(timeout=duration*2)
+                if show_record_event.is_set():
+                    break
+
+
 
 
 thread_record = threading.Thread(target=recording_thread)
