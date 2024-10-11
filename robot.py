@@ -23,6 +23,7 @@ import re
 import pyttsx4
 import subprocess
 import psutil
+import shlex
 
 import threading
 import queue
@@ -55,6 +56,12 @@ senvc_load_done = threading.Event()
 ask_text_q = queue.Queue()
 ans_text_q = queue.Queue()
 
+oled_events = {
+    "left": threading.Event(),
+    "right": threading.Event()
+}
+
+bool_Chinese_tts = True
 
 Device.pin_factory = LGPIOFactory()
 
@@ -140,6 +147,7 @@ def sensevoice_thread():
 
 
 def llama_thread():
+    global bool_Chinese_tts
     model = llama_cpp.Llama(
     model_path="./models/llama/qwen1_5-0_5b-chat-q4_0.gguf",
     verbose = False,
@@ -159,11 +167,12 @@ def llama_thread():
             }],
             logprobs=False,
             #stream=True,
-            max_tokens = 80,
+            max_tokens = 100,
         )
         ans_text = ans_text['choices'][0]['message']['content']
         print(ans_text)
         ans_text_tts = ans_text.replace("，", "。")
+        bool_Chinese_tts = bool(re.search(r'[\u4e00-\u9fff]', ans_text_tts)) # Chinese?
         ans_text_q.put(ans_text_tts)
         model_doing_event.clear()
 #        ans_text = ""
@@ -192,12 +201,17 @@ def terminate_process(pid):
         print(f"Error terminating process: {e}")
 
 def tts_thread():
+    global bool_Chinese_tts
     #engine = pyttsx4.init()
     #engine.setProperty('voice', 'zh')
-    piper_cmd = './piper/piper --model ./models/piper/zh_CN-huayan-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -'
+    piper_cmd_zh = "./piper/piper --model ./models/piper/zh_CN-huayan-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -"
+    piper_cmd_en = "./piper/piper --model ./models/piper/en_GB-jenny_dioco-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -"
     while True:
         tts_text = ans_text_q.get()
-        command = f"echo '{tts_text}' | {piper_cmd}"
+        if bool_Chinese_tts:
+            command = f"echo \"{tts_text}\" | {piper_cmd_zh}"
+        else:
+            command = f'echo {shlex.quote(tts_text)} | {piper_cmd_en}'
         process = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while True:
             if stop_tts_event.is_set():
@@ -244,7 +258,15 @@ def oled_thread(oled_device, dir):
                 show_record_event.wait(timeout=duration*2)
                 if show_record_event.is_set():
                     break
-
+                else:
+                    if dir == "left":
+                        oled_events["left"].set()
+                        oled_events["right"].wait()
+                        oled_events["right"].clear()
+                    else:
+                        oled_events["right"].set()
+                        oled_events["left"].wait()
+                        oled_events["left"].clear()
 
 
 
