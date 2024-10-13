@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+
+import os
+import threading
+import queue
+
 # for key
 from gpiozero.pins.lgpio import LGPIOFactory
 from gpiozero import Device, Button
@@ -23,15 +29,14 @@ import subprocess
 import psutil
 import shlex
 
-import threading
-import queue
-
 # for oled
 from PIL import Image, ImageSequence
 from PIL import ImageFont, ImageDraw
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
 from luma.oled.device import ssd1306
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
 
 serial_64 = i2c(port=1, address=0x3D)
 oled_right = ssd1306(serial_64, width=128, height=64)
@@ -90,7 +95,7 @@ def recording_thread():
         start_record_event.clear()
         # record audio init
         device = 'default'
-        wavfile = wave.open("test.wav", 'wb')
+        wavfile = wave.open(f"{current_dir}/record.wav", 'wb')
 
         # Open the device in nonblocking capture mode. The last argument could
         # just as well have been zero for blocking mode. Then we could have
@@ -124,8 +129,8 @@ def recording_thread():
 def sensevoice_thread():
     from model import SenseVoiceSmall
     from funasr.utils.postprocess_utils import rich_transcription_postprocess
-    
-    model_dir = "./models/SenseVoiceSmall"
+
+    model_dir =  f"{current_dir}/models/SenseVoiceSmall"
     m, kwargs = SenseVoiceSmall.from_pretrained(model=model_dir, device="cuda:0")
     m.eval()
     senvc_load_done.set()
@@ -135,7 +140,7 @@ def sensevoice_thread():
         trig_sensevoice_event.wait()
         trig_sensevoice_event.clear()
         res = m.inference(
-            data_in=f"./test.wav",
+            data_in=f"{current_dir}/record.wav",
             language="auto", # "zh", "en", "yue", "ja", "ko", "nospeech"
             use_itn=False,
             ban_emo_unk=False,
@@ -149,7 +154,7 @@ def sensevoice_thread():
 def llama_thread():
     global bool_Chinese_tts
     model = llama_cpp.Llama(
-    model_path="./models/llama/qwen1_5-0_5b-chat-q4_0.gguf",
+    model_path= f"{current_dir}/models/llama/qwen1_5-0_5b-chat-q4_0.gguf",
     #n_ctx = 4096,
     verbose = False,
     )
@@ -211,8 +216,8 @@ def tts_thread():
     global bool_Chinese_tts
     #engine = pyttsx4.init()
     #engine.setProperty('voice', 'zh')
-    piper_cmd_zh = "./piper/piper --model ./models/piper/zh_CN-huayan-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -"
-    piper_cmd_en = "./piper/piper --model ./models/piper/en_GB-jenny_dioco-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -"
+    piper_cmd_zh =  f"{current_dir}/piper/piper --model {current_dir}/models/piper/zh_CN-huayan-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -"
+    piper_cmd_en =  f"{current_dir}/piper/piper --model {current_dir}/models/piper/en_GB-jenny_dioco-medium.onnx --output-raw | aplay -r 22050 -f S16_LE -t raw -"
     while True:
         tts_text = ans_text_q.get()
         if bool_Chinese_tts:
@@ -232,20 +237,20 @@ def tts_thread():
         #engine.runAndWait()
 
 def oled_thread(oled_device, dir):
-    with Image.open(f"./img/{dir}_logo.bmp") as img:
+    with Image.open(f"{current_dir}/img/{dir}_logo.bmp") as img:
         img_resized = img.convert("1").resize((128, 64))
         oled_device.display(img_resized)
         llama_load_done.wait()
         senvc_load_done.wait()
     frames_eye = []
     durations_eye = [] 
-    with Image.open(f"./img/{dir}_eye.gif") as img:
+    with Image.open(f"{current_dir}/img/{dir}_eye.gif") as img:
         for frame in ImageSequence.Iterator(img):
             frames_eye.append(frame.convert("1").resize((128,64)))
             durations_eye.append(frame.info.get('duration', 100) / 1000.0)
     frames_rcd = []
     durations_rcd = [] 
-    with Image.open(f"./img/record.gif") as img:
+    with Image.open(f"{current_dir}/img/record.gif") as img:
         for frame in ImageSequence.Iterator(img):
             frames_rcd.append(frame.convert("1").resize((128,64)))
             durations_rcd.append(frame.info.get('duration', 100) / 1000.0)
@@ -261,8 +266,10 @@ def oled_thread(oled_device, dir):
             for frame, duration in zip(frames_eye, durations_eye):
                 if model_doing_event.is_set() and duration > 1:
                     continue
+                if duration > 1:
+                    duration = duration*2
                 oled_device.display(frame)
-                show_record_event.wait(timeout=duration*2)
+                show_record_event.wait(timeout=duration)
                 if show_record_event.is_set():
                     break
                 else:
