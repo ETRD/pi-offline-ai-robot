@@ -145,31 +145,37 @@ def sensevoice_thread():
         ask_text_q.put(text)
         trig_llama_event.set()
 
-
 def llama_thread():
     global bool_Chinese_tts
     model = llama_cpp.Llama(
     model_path="./models/llama/qwen1_5-0_5b-chat-q4_0.gguf",
+    #n_ctx = 4096,
     verbose = False,
     )
     ch_punctuations_re = "[，。？；]"
     llama_load_done.set()
+    messages_history = []
+    max_msg_history = 2
     print("Load llama model done")
+
     while True:
         trig_llama_event.wait()
         trig_llama_event.clear()
         ask_text = ask_text_q.get()
         print(ask_text)
+        messages_history.append({"role": "user", "content": ask_text})
+        if len(messages_history) > max_msg_history:
+            messages_history = messages_history[-max_msg_history:]
         ans_text = model.create_chat_completion(
-            messages=[{
-                "role": "user",
-                "content": f"{ask_text}"
-            }],
+            messages= messages_history,
             logprobs=False,
             #stream=True,
             max_tokens = 100,
         )
         ans_text = ans_text['choices'][0]['message']['content']
+        messages_history.append({"role": "assistant", "content": ans_text})
+        if len(messages_history) > max_msg_history:
+            messages_history = messages_history[-max_msg_history:]
         print(ans_text)
         ans_text_tts = ans_text.replace("，", "。")
         bool_Chinese_tts = bool(re.search(r'[\u4e00-\u9fff]', ans_text_tts)) # Chinese?
