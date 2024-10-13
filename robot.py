@@ -12,8 +12,6 @@ import alsaaudio
 from datetime import datetime
 
 # for SenseVoice
-from model import SenseVoiceSmall
-from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
 # for llama
 import llama_cpp
@@ -124,6 +122,9 @@ def recording_thread():
                 time.sleep(.001)
 
 def sensevoice_thread():
+    from model import SenseVoiceSmall
+    from funasr.utils.postprocess_utils import rich_transcription_postprocess
+    
     model_dir = "./models/SenseVoiceSmall"
     m, kwargs = SenseVoiceSmall.from_pretrained(model=model_dir, device="cuda:0")
     m.eval()
@@ -275,27 +276,30 @@ def oled_thread(oled_device, dir):
                         oled_events["left"].clear()
 
 
+thread_oled_left = threading.Thread(target=oled_thread, args=(oled_left,"left"))
+thread_oled_right = threading.Thread(target=oled_thread, args=(oled_right,"right"))
+
+thread_oled_left.start()
+thread_oled_right.start()
 
 thread_record = threading.Thread(target=recording_thread)
 thread_sensevoice = threading.Thread(target=sensevoice_thread)
 thread_llama = threading.Thread(target=llama_thread)
 thread_tts = threading.Thread(target=tts_thread)
-thread_oled_left = threading.Thread(target=oled_thread, args=(oled_left,"left"))
-thread_oled_right = threading.Thread(target=oled_thread, args=(oled_right,"right"))
+
 
 thread_record.start()
 thread_sensevoice.start()
 thread_llama.start()
 thread_tts.start()
-thread_oled_left.start()
-thread_oled_right.start()
 
+
+thread_oled_left.join()
+thread_oled_right.join()
 thread_record.join()
 thread_sensevoice.join()
 thread_llama.join()
 thread_tts.join()
-thread_oled_left.join()
-thread_oled_right.join()
 
 # Keep the program running
 pause()
