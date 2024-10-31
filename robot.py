@@ -30,7 +30,7 @@ import psutil
 import shlex
 
 # for oled
-from PIL import Image, ImageSequence
+from PIL import Image, ImageSequence, ImageOps
 from PIL import ImageFont, ImageDraw
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
@@ -144,7 +144,7 @@ def sensevoice_thread():
     m, kwargs = SenseVoiceSmall.from_pretrained(model=model_dir, device="cuda:0")
     m.eval()
     senvc_load_done.set()
-    print("Load sensevoid model done")
+    print("Load sensevoice model done")
 
     while True:
         trig_sensevoice_event.wait()
@@ -187,6 +187,7 @@ def llama_thread():
             messages=messages_history,
             logprobs=False,
             # stream=True,
+            repeat_penalty = 1.2,
             max_tokens=100,
         )
         ans_text = ans_text["choices"][0]["message"]["content"]
@@ -257,6 +258,7 @@ def tts_thread():
 def oled_thread(oled_device, dir):
     with Image.open(f"{current_dir}/img/{dir}_logo.bmp") as img:
         img_resized = img.convert("1").resize((128, 64))
+        img_resized = ImageOps.invert(img_resized)
         oled_device.display(img_resized)
         llama_load_done.wait()
         senvc_load_done.wait()
